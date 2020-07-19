@@ -86,6 +86,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"golang.org/x/tools/go/packages"
 )
 
 var (
@@ -165,15 +167,32 @@ func fmtDoc(doc string) string {
 	return strings.Join(acc, "")
 }
 
+func buildFullImport(path string) (string, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName,
+	}
+	pkgs, err := packages.Load(cfg, path)
+	if err != nil {
+		return "", err
+	}
+	if len(pkgs) != 1 {
+		return "", fmt.Errorf("found %d pkgs, path(%s) should be unique", len(pkgs), path)
+	}
+	return pkgs[0].PkgPath, nil
+}
+
 func getDoc(dir string) (Doc, error) {
 	bi, err := build.ImportDir(dir, 0)
 	if err != nil {
 		return Doc{}, nil
 	}
 
-	ip, err := importPath(dir)
-	if err != nil {
-		return Doc{}, err
+	if build.IsLocalImport(bi.ImportPath) {
+		fi, err := buildFullImport(dir)
+		if err != nil {
+			return Doc{}, fmt.Errorf("failed to resolve local import %q to full import: %w", bi.ImportPath, err)
+		}
+		bi.ImportPath = fi
 	}
 
 	filter := func(fi os.FileInfo) bool {
@@ -213,12 +232,12 @@ func getDoc(dir string) (Doc, error) {
 	}
 
 	//get import path without the github.com/
-	pathelms := strings.Split(ip, "/")[1:]
+	pathelms := strings.Split(bi.ImportPath, "/")[1:]
 	repo := path.Join(pathelms...)
 
 	return Doc{
 		Name:     name,
-		Import:   ip,
+		Import:   bi.ImportPath,
 		Synopsis: bi.Doc,
 		Doc:      fmtDoc(docs.Doc),
 		Example:  examples,
